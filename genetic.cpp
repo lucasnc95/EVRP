@@ -175,11 +175,30 @@ void run_genetic() {
     decode_and_evaluate(population[bi]);
 }
 
+#include <fstream> // necessário para usar std::ofstream
+
 void print_best_solution() {
-    std::cout << "Best solution:" << std::endl;
-    for (size_t i = 0; i < best_routes.size(); ++i) {
-        std::cout << "Vehicle " << i+1 << ": 0";
-        for (int c : best_routes[i]) std::cout << " -> " << c;
-        std::cout << " -> 0" << std::endl;
+    std::ofstream out("solution.txt");
+    if (!out.is_open()) {
+        std::cerr << "Erro ao abrir arquivo solution.txt para escrita." << std::endl;
+        return;
     }
+
+    std::cout << "Best solution:" << std::endl;
+
+    for (size_t i = 0; i < best_routes.size(); ++i) {
+        std::cout << "Vehicle " << i + 1 << ": 0";
+        out << "Vehicle " << i + 1 << ": 0";
+
+        for (int c : best_routes[i]) {
+            std::cout << " -> " << c;
+            out << " -> " << c;
+        }
+
+        std::cout << " -> 0" << std::endl;
+        out << " -> 0" << std::endl;
+    }
+
+    out.close();
 }
+
