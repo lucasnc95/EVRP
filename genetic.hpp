@@ -8,7 +8,7 @@
 
 // GA parameters
 static const int POP_SIZE = 100;
-static const int NUM_GENERATIONS = 300;
+static const int NUM_GENERATIONS = 500;
 static const double CROSSOVER_RATE = 0.7;
 static const double MUTATION_RATE = 0.01;
 
