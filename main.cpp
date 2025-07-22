@@ -1,6 +1,8 @@
-#include<iostream>
-#include<stdlib.h>
-#include<limits.h>
+// main.cpp
+#include <iostream>
+#include <stdlib.h>
+#include <limits.h>
+#include <algorithm>
 
 #include "EVRP.hpp"
 #include "stats.hpp"
@@ -8,52 +10,60 @@
 
 using namespace std;
 
-/*initialiazes a run for your heuristic*/
-void start_run(int r){
-  srand(r); //random seed
-  init_evals();
-  init_current_best();
-  cout << "Run: " << r << " with random seed " << r << endl;
+/* inicializa uma execução */
+void start_run(int r) {
+    srand(r);
+    init_evals();
+    init_current_best();
+    cout << "Run: " << r << " with random seed " << r << endl;
 }
 
-/*gets an observation of the run for your heuristic*/
-void end_run(int r){
-  get_mean(r-1,get_current_best()); //from stats.h
-  cout << "End of run " << r << " with best solution quality " << get_current_best() << " total evaluations: " << get_evals()  << endl;
-  cout << " " << endl;
+/* registra os resultados da execução */
+void end_run(int r) {
+    get_mean(r-1, get_current_best());
+    cout << "End of run " << r
+         << " with best solution quality " << get_current_best()
+         << " total evaluations: " << get_evals() << endl << endl;
 }
 
-/****************************************************************/
-/*                Main Function                                 */
-/****************************************************************/
 int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        cout << "Usage: ./main <instance_file.evrp>" << endl;
+        return 1;
+    }
 
-  if (argc < 2) {
-    cout << "Usage: ./main <instance_file.evrp>" << endl;
-    return 1;
-  }
+    // Lê e monta o problema
+    problem_instance = argv[1];
+    read_problem(problem_instance);
 
-  int run;
-  problem_instance = argv[1];       //pass the .evrp filename as an argument
-  read_problem(problem_instance);   //Read EVRP from file from EVRP.h
+    // Abre estatísticas
+    open_stats();
 
-  open_stats(); //open text files to store the best values from the 20 runs stats.h
+    for (int run = 1; run <= MAX_TRIALS; ++run) {
+        start_run(run);
 
-  for(run = 1; run <= MAX_TRIALS; run++){
-      start_run(run);
+        // Inicializa e roda o GA
+        initialize_genetic(NUM_OF_CUSTOMERS);
+        set_target_vehicles( 3, 10000 );
+        run_genetic();
 
-      // Substitui heurística por GA
-      initialize_genetic(NUM_OF_CUSTOMERS);
-      run_genetic();
-      print_best_solution();
-      end_run(run);  //store the best solution quality for each run
-  }
+        // Imprime a melhor rota encontrada nesta execução
+        cout << "\nBest route for run " << run << ":\n";
+        print_best_solution();
 
-  close_stats(); //close text files to calculate the mean result from the 20 runs stats.h
+        // Captura o rawK do melhor indivíduo para reproduzir aquela divisão
+      int bestIdx = min_element(fitness_vals.begin(), fitness_vals.end())
+                      - fitness_vals.begin();
+        int bestK = population[bestIdx][0].first;  // <-- extrai .first do pair
 
-  //free memory
-  free_stats();
-  free_EVRP();
+        cout << "\nRoute for rawK = " << bestK << ":\n";
+        print_best_solution();
+        end_run(run);
+    }
 
-  return 0;
+    // Finaliza estatísticas e libera tudo
+    close_stats();
+    free_stats();
+    free_EVRP();
+    return 0;
 }

@@ -1,204 +1,306 @@
-// genetic.cpp
 #include "genetic.hpp"
 #include "EVRP.hpp"
-#include <iostream>
 #include <random>
-#include <cmath>
-#include <limits>
 #include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <cmath>
 
-// Bits para codificar K e prioridades
-static int BITS_VEH;
-static int BITS_PER_GENE;
+// ------------------------
+// Variáveis globais
+// ------------------------
+std::vector<Chromosome> population;
+std::vector<double> fitness_vals;
+int TARGET_VEHICLES = 0;
+double VEHICLE_PENALTY = 10000.0;
 
-// População e fitness
-auto population = std::vector<Chromosome>();
-auto fitness_vals = std::vector<double>();
-// Melhor divisão
-static std::vector<std::vector<int>> best_routes;
-// RNG
+// Melhor solução global encontrada
+double global_best_fitness = std::numeric_limits<double>::max();
+double global_best_real_distance = 0.0;
+std::vector<std::vector<int>> global_best_routes;
+
 static std::mt19937 rng(std::random_device{}());
 
-// Avalia distância de uma rota
-static double evaluate_distance(const std::vector<int> &route) {
-    double total = 0.0;
-    for (size_t i = 0; i + 1 < route.size(); ++i)
-        total += distances[route[i]][route[i+1]];
-    return total;
+// ------------------------
+// Funções auxiliares
+// ------------------------
+static std::vector<int> decode_full_route(const Chromosome &C) {
+    int n = NUM_OF_CUSTOMERS;
+    std::vector<std::pair<int, int>> ord;
+    ord.reserve(n);
+    for (int i = 0; i < n; ++i) ord.emplace_back(C[i].first, i + 1);
+    std::sort(ord.begin(), ord.end());
+
+    std::vector<int> route;
+    route.reserve(n + n + 2);
+    route.push_back(DEPOT);
+    for (int i = 0; i < n; ++i) {
+        route.push_back(ord[i].second);
+        if (C[i].second && i + 1 < n) {
+            route.push_back(DEPOT);
+        }
+    }
+    if (route.back() != DEPOT) route.push_back(DEPOT);
+    return route;
 }
 
-// DP para particionar em mv rotas
-static std::pair<double,std::vector<std::vector<int>>> splitRoutes(
-    const std::vector<int> &o, int mv) {
-    int n = o.size();
-    std::vector<double> best(n+1, std::numeric_limits<double>::infinity());
-    std::vector<int> prev(n+1, -1);
-    best[0] = 0.0;
-    for (int j = 1; j <= n; ++j) {
-        for (int i = 0; i < j; ++i) {
-            double cost = distances[DEPOT][o[i]];
-            for (int k = i; k < j-1; ++k)
-                cost += distances[o[k]][o[k+1]];
-            cost += distances[o[j-1]][DEPOT];
-            double tot = best[i] + cost;
-            if (tot < best[j]) {
-                best[j] = tot;
-                prev[j] = i;
+static int count_vehicles(const std::vector<int> &full_route) {
+    int zeros = 0;
+    for (int x : full_route) if (x == DEPOT) zeros++;
+    return std::max(1, zeros - 1);
+}
+
+// ------------------------
+// API de configuração
+// ------------------------
+void set_target_vehicles(int x, double penalty) {
+    TARGET_VEHICLES = x;
+    VEHICLE_PENALTY = penalty;
+}
+
+// ------------------------
+// Avaliação de rota
+// ------------------------
+static double evaluate_distance(const std::vector<int>& route) {
+    double tot = 0;
+    for (size_t i = 0; i + 1 < route.size(); ++i)
+        tot += distances[route[i]][route[i + 1]];
+    return tot;
+}
+
+static void two_opt(std::vector<int>& r) {
+    bool improved;
+    int n = r.size();
+    do {
+        improved = false;
+        for (int i = 1; i < n - 2; ++i) {
+            for (int k = i + 1; k < n - 1; ++k) {
+                double delta = 
+                    distances[r[i - 1]][r[k]] +
+                    distances[r[i]][r[k + 1]] -
+                    (distances[r[i - 1]][r[i]] + distances[r[k]][r[k + 1]]);
+                if (delta < -1e-8) {
+                    std::reverse(r.begin() + i, r.begin() + k + 1);
+                    improved = true;
+                }
+            }
+        }
+    } while (improved);
+}
+
+static bool swap_improve(std::vector<int>& r) {
+    int n = r.size();
+    for (int i = 1; i < n - 2; ++i) {
+        for (int j = i + 1; j < n - 1; ++j) {
+            std::swap(r[i], r[j]);
+            double newc = evaluate_distance(r);
+            std::swap(r[i], r[j]);
+            if (newc + 1e-8 < evaluate_distance(r)) {
+                std::swap(r[i], r[j]);
+                return true;
             }
         }
     }
-    std::vector<int> cuts;
-    for (int idx = n; idx > 0; idx = prev[idx])
-        cuts.push_back(idx);
-    std::reverse(cuts.begin(), cuts.end());
-    std::vector<std::vector<int>> R;
-    int start = 0;
-    for (int cut : cuts) {
-        R.emplace_back(o.begin() + start, o.begin() + cut);
-        start = cut;
-    }
-    while ((int)R.size() < mv) {
-        int wi = 0;
-        double wcost = -1;
-        for (int i = 0; i < (int)R.size(); ++i) {
-            std::vector<int> full = {DEPOT};
-            full.insert(full.end(), R[i].begin(), R[i].end());
-            full.push_back(DEPOT);
-            double c = evaluate_distance(full);
-            if (c > wcost) { wcost = c; wi = i; }
-        }
-        auto r = R[wi];
-        R.erase(R.begin() + wi);
-        int mid = r.size() / 2;
-        R.insert(R.begin() + wi, std::vector<int>(r.begin() + mid, r.end()));
-        R.insert(R.begin() + wi, std::vector<int>(r.begin(), r.begin() + mid));
-    }
-    double total = 0.0;
-    for (auto &r : R) {
-        std::vector<int> full = {DEPOT};
-        full.insert(full.end(), r.begin(), r.end());
-        full.push_back(DEPOT);
-        total += evaluate_distance(full);
-    }
-    return {total, R};
+    return false;
 }
 
+// Retorna: (fitness, distância_real, rotas)
+static std::tuple<double, double, std::vector<std::vector<int>>>
+decode_and_localsearch(const Chromosome &C) {
+    auto full = decode_full_route(C);
+    std::vector<std::vector<int>> routes;
+    routes.emplace_back();
+    for (size_t i = 1; i + 1 < full.size(); ++i) {
+        if (full[i] == DEPOT) {
+            routes.emplace_back();
+        } else {
+            routes.back().push_back(full[i]);
+        }
+    }
+
+    double total_dist = 0.0;
+    for (auto &r : routes) {
+        std::vector<int> seg = {DEPOT};
+        seg.insert(seg.end(), r.begin(), r.end());
+        seg.push_back(DEPOT);
+
+        two_opt(seg);
+        while (swap_improve(seg));
+
+        for (size_t i = 0; i + 1 < seg.size(); ++i)
+            total_dist += distances[seg[i]][seg[i + 1]];
+
+        r.assign(seg.begin() + 1, seg.end() - 1);
+    }
+
+    int num_vehicles = count_vehicles(full);
+    double fitness = total_dist;
+    
+    // CORREÇÃO APLICADA AQUI: Removido o termo adicional '1.0 +'
+    if (TARGET_VEHICLES > 0 && num_vehicles < TARGET_VEHICLES) {
+        int deficit = TARGET_VEHICLES - num_vehicles;
+        fitness += deficit * VEHICLE_PENALTY;
+    }
+
+    return {fitness, total_dist, routes};
+}
+
+// ------------------------
+// Inicialização
+// ------------------------
 void initialize_genetic(int num_customers) {
-    int range = NUM_OF_CUSTOMERS - MIN_VEHICLES + 1;
-    BITS_VEH = std::ceil(std::log2(range));
-    BITS_PER_GENE = std::ceil(std::log2(num_customers + 1));
-    int chrom_len = BITS_VEH + BITS_PER_GENE * num_customers;
-    population.assign(POP_SIZE, Chromosome(chrom_len));
-    fitness_vals.assign(POP_SIZE, 0.0);
-    std::uniform_int_distribution<> bit01(0, 1);
+    population.resize(POP_SIZE);
+    fitness_vals.resize(POP_SIZE);
+    std::uniform_int_distribution<> pd(0, num_customers * 10);
+    std::bernoulli_distribution bd(0.3);
+
     for (int i = 0; i < POP_SIZE; ++i) {
-        Chromosome &c = population[i];
-        for (int j = 0; j < chrom_len; ++j)
-            c[j] = bit01(rng);
-        fitness_vals[i] = decode_and_evaluate(c);
-    }
-}
-
-int binary_to_decimal(const Chromosome &chrom, int start, int len) {
-    int v = 0;
-    for (int i = 0; i < len; ++i)
-        v = (v << 1) | chrom[start + i];
-    return v;
-}
-
-double decode_and_evaluate(const Chromosome &chrom) {
-    int nc = (chrom.size() - BITS_VEH) / BITS_PER_GENE;
-    int range = NUM_OF_CUSTOMERS - MIN_VEHICLES + 1;
-    int rawK = binary_to_decimal(chrom, 0, BITS_VEH);
-    int K = (rawK % range) + MIN_VEHICLES;
-    std::vector<std::pair<int, int>> order;
-    for (int g = 0; g < nc; ++g) {
-        int val = binary_to_decimal(chrom, BITS_VEH + g * BITS_PER_GENE, BITS_PER_GENE);
-        order.emplace_back(val, g + 1);
-    }
-    std::sort(order.begin(), order.end());
-    std::vector<int> seq;
-    for (auto &p : order)
-        seq.push_back(p.second);
-    auto [total, routes] = splitRoutes(seq, K);
-    best_routes = routes;
-    return total;
-}
-
-Chromosome tournament_selection() {
-    int tsize = 3;
-    double best = std::numeric_limits<double>::infinity();
-    Chromosome win;
-    for (int i = 0; i < tsize; ++i) {
-        int idx = std::uniform_int_distribution<>(0, POP_SIZE - 1)(rng);
-        if (fitness_vals[idx] < best) {
-            best = fitness_vals[idx];
-            win = population[idx];
+        Chromosome C(num_customers);
+        for (int j = 0; j < num_customers; ++j)
+            C[j] = {pd(rng), bd(rng)};
+        
+        auto [f, real_dist, routes] = decode_and_localsearch(C);
+        population[i] = std::move(C);
+        fitness_vals[i] = f;
+        
+        // Atualiza melhor solução global
+        if (f < global_best_fitness) {
+            global_best_fitness = f;
+            global_best_real_distance = real_dist;
+            global_best_routes = routes;
         }
     }
-    return win;
 }
 
-std::pair<Chromosome, Chromosome> crossover(const Chromosome &a, const Chromosome &b) {
-    if (std::uniform_real_distribution<>(0,1)(rng) > CROSSOVER_RATE) return {a, b};
-    int n = a.size();
-    int pt = std::uniform_int_distribution<>(1, n - 1)(rng);
-    Chromosome c1 = a, c2 = b;
-    for (int i = pt; i < n; ++i) {
-        bool tmp = c1[i]; c1[i] = c2[i]; c2[i] = tmp;
+// ------------------------
+// Operadores genéticos
+// ------------------------
+Chromosome tournament_selection() {
+    std::uniform_int_distribution<> id(0, POP_SIZE - 1);
+    int best = id(rng);
+    double bf = fitness_vals[best];
+    for (int k = 1; k < 3; ++k) {
+        int r = id(rng);
+        if (fitness_vals[r] < bf) {
+            bf = fitness_vals[r];
+            best = r;
+        }
     }
+    return population[best];
+}
+
+std::pair<Chromosome, Chromosome>
+crossover(const Chromosome &A, const Chromosome &B) {
+    std::uniform_real_distribution<> rd(0, 1);
+    if (rd(rng) > CROSSOVER_RATE) return {A, B};
+    
+    int n = A.size();
+    int pt = std::uniform_int_distribution<>(1, n - 1)(rng);
+    Chromosome c1 = A, c2 = B;
+    for (int i = pt; i < n; ++i)
+        std::swap(c1[i], c2[i]);
     return {c1, c2};
 }
 
-void mutate(Chromosome &c) {
-    for (size_t i = 0; i < c.size(); ++i) {
-        if (std::uniform_real_distribution<>(0,1)(rng) < MUTATION_RATE) c[i] = !c[i];
+void mutate(Chromosome &C) {
+    std::uniform_real_distribution<> rd(0, 1);
+    std::uniform_int_distribution<> pd(0, C.size() * 10);
+    for (auto &g : C) {
+        if (rd(rng) < MUTATION_RATE) g.first = pd(rng);
+        if (rd(rng) < MUTATION_RATE) g.second = !g.second;
     }
 }
 
+// ------------------------
+// Loop principal
+// ------------------------
 void run_genetic() {
-    for (int gen = 0; gen < NUM_GENERATIONS; ++gen) {
-        std::vector<Chromosome> np; std::vector<double> nf;
+    for (int gen = 1; gen <= NUM_GENERATIONS; ++gen) {
+        std::vector<Chromosome> NP;
+        std::vector<double> NF;
+        NP.reserve(POP_SIZE);
+        NF.reserve(POP_SIZE);
+
+        // Preserva o melhor indivíduo
         int bi = std::min_element(fitness_vals.begin(), fitness_vals.end()) - fitness_vals.begin();
-        np.push_back(population[bi]); nf.push_back(fitness_vals[bi]);
-        while ((int)np.size() < POP_SIZE) {
-            auto p1 = tournament_selection(), p2 = tournament_selection();
+        NP.push_back(population[bi]);
+        NF.push_back(fitness_vals[bi]);
+
+        while ((int)NP.size() < POP_SIZE) {
+            auto p1 = tournament_selection();
+            auto p2 = tournament_selection();
             auto [c1, c2] = crossover(p1, p2);
-            mutate(c1); mutate(c2);
-            nf.push_back(decode_and_evaluate(c1)); np.push_back(c1);
-            if ((int)np.size() < POP_SIZE) { nf.push_back(decode_and_evaluate(c2)); np.push_back(c2); }
+            mutate(c1);
+            mutate(c2);
+
+            auto eval = [](Chromosome &C) -> std::tuple<double, double, std::vector<std::vector<int>>> {
+                return decode_and_localsearch(C);
+            };
+
+            auto [f1, rd1, rt1] = eval(c1);
+            NP.push_back(c1);
+            NF.push_back(f1);
+
+            // Atualiza melhor global
+            if (f1 < global_best_fitness) {
+                global_best_fitness = f1;
+                global_best_real_distance = rd1;
+                global_best_routes = rt1;
+            }
+
+            if ((int)NP.size() < POP_SIZE) {
+                auto [f2, rd2, rt2] = eval(c2);
+                NP.push_back(c2);
+                NF.push_back(f2);
+                
+                if (f2 < global_best_fitness) {
+                    global_best_fitness = f2;
+                    global_best_real_distance = rd2;
+                    global_best_routes = rt2;
+                }
+            }
         }
-        population.swap(np); fitness_vals.swap(nf);
+
+        population.swap(NP);
+        fitness_vals.swap(NF);
+
+        // Debug periódico
+        if (gen % LOCAL_EVERY == 0) {
+            std::cout << "Gen " << gen
+                      << " best fitness=" << global_best_fitness
+                      << "  (#rotas=" << global_best_routes.size() << ")"
+                      << "  dist=" << global_best_real_distance << "\n";
+
+            for (size_t r = 0; r < global_best_routes.size(); ++r) {
+                std::cout << " Vehicle " << (r + 1) << ": 0";
+                for (int cust : global_best_routes[r]) {
+                    std::cout << " -> " << cust;
+                }
+                std::cout << " -> 0\n";
+            }
+            std::cout << "--------------------------------\n";
+        }
     }
-    int bi = std::min_element(fitness_vals.begin(), fitness_vals.end()) - fitness_vals.begin();
-    extern double current_best; current_best = fitness_vals[bi];
-    decode_and_evaluate(population[bi]);
 }
 
-#include <fstream> // necessário para usar std::ofstream
-
+// ------------------------
+// Impressão da solução
+// ------------------------
 void print_best_solution() {
     std::ofstream out("solution.txt");
-    if (!out.is_open()) {
-        std::cerr << "Erro ao abrir arquivo solution.txt para escrita." << std::endl;
+    if (!out) {
+        std::cerr << "Erro ao abrir solution.txt\n";
         return;
     }
 
-    std::cout << "Best solution:" << std::endl;
-
-    for (size_t i = 0; i < best_routes.size(); ++i) {
-        std::cout << "Vehicle " << i + 1 << ": 0";
+    for (size_t i = 0; i < global_best_routes.size(); ++i) {
         out << "Vehicle " << i + 1 << ": 0";
-
-        for (int c : best_routes[i]) {
-            std::cout << " -> " << c;
+        for (int c : global_best_routes[i]) {
             out << " -> " << c;
         }
-
-        std::cout << " -> 0" << std::endl;
-        out << " -> 0" << std::endl;
+        out << " -> 0\n";
     }
-
-    out.close();
+    out << "Total distance: " << global_best_real_distance << "\n";
+    std::cout << "Total distance: " << global_best_real_distance << std::endl;
 }
-
