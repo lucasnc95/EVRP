@@ -1,31 +1,36 @@
-// genetic.hpp
 #ifndef GENETIC_HPP
 #define GENETIC_HPP
 
 #include <vector>
 #include <utility>
-#include "EVRP.hpp"
 
-// GA parameters
-static const int POP_SIZE = 100;
-static const int NUM_GENERATIONS = 500;
-static const double CROSSOVER_RATE = 0.7;
-static const double MUTATION_RATE = 0.01;
+// --- Parâmetros do GA ---
+static const int POP_SIZE         = 100;
+static const int NUM_GENERATIONS  = 500;
+static const double CROSSOVER_RATE = 0.8;
+static const double MUTATION_RATE  = 0.02;
+static const int LOCAL_EVERY       = 20;
 
-using Chromosome = std::vector<int>;
+// --- Controle de veículos alvo ---
+extern int TARGET_VEHICLES;      // número desejado de veículos
+extern double VEHICLE_PENALTY;   // penalidade por ter menos veículos
 
-extern std::vector<Chromosome> population;
-extern std::vector<double> fitness_vals;
+// --- Integração EVRP ---
+extern double **distances;       // matriz de distâncias
+extern int    NUM_OF_CUSTOMERS;  // número de clientes
+extern int    DEPOT;             // índice do depósito
+
+// --- Genoma & Estado ---
+using Gene       = std::pair<int,bool>;    // <prioridade, retorna_ao_depot?>
+using Chromosome = std::vector<Gene>;
+extern std::vector<Chromosome>       population;
+extern std::vector<double>           fitness_vals;
 extern std::vector<std::vector<int>> best_routes;
-extern double **distances;
 
+// --- Interface ---
+void set_target_vehicles(int x, double penalty);
 void initialize_genetic(int num_customers);
-double decode_and_evaluate(const Chromosome &chrom);
-Chromosome tournament_selection();
-std::pair<Chromosome,Chromosome> crossover(const Chromosome &a, const Chromosome &b);
-void mutate(Chromosome &c);
 void run_genetic();
 void print_best_solution();
-void print_solution_for_k(int rawK);
 
 #endif // GENETIC_HPP

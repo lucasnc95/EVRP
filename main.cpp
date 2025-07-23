@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <algorithm>
+#include <chrono>
 
 #include "EVRP.hpp"
 #include "stats.hpp"
@@ -9,8 +10,9 @@
 #include <vector>
 
 using namespace std;
+using Clock = std::chrono::high_resolution_clock;
 
-/*initializes a run for your heuristic*/
+/* inicializa uma execução */
 void start_run(int r) {
     srand(r);
     init_evals();
@@ -18,12 +20,13 @@ void start_run(int r) {
     cout << "Run: " << r << " with random seed " << r << endl;
 }
 
-/*gets an observation of the run for your heuristic*/
+/* finaliza uma execução */
 void end_run(int r) {
+    // armazena o best daquela run
     get_mean(r-1, get_current_best());
     cout << "End of run " << r
          << " with best solution quality " << get_current_best()
-         << " total evaluations: " << get_evals() << endl << endl;
+         << " total evaluations: " << get_evals() << endl;
 }
 
 int main(int argc, char *argv[]) {
@@ -39,20 +42,23 @@ int main(int argc, char *argv[]) {
     for (int run = 1; run <= MAX_TRIALS; run++) {
         start_run(run);
 
+        // começa a contagem de tempo
+        auto t0 = Clock::now();
+
         initialize_genetic(NUM_OF_CUSTOMERS);
         run_genetic();
 
-        // Imprime rota ótima encontrada
-        cout << "Best route for run " << run << ":" << endl;
-        print_best_solution();
+        // fim da contagem
+        auto t1 = Clock::now();
+        double elapsed_s = chrono::duration<double>(t1 - t0).count();
 
-        // Imprime rota para o mesmo K do melhor indivíduo
-        int bestIdx = min_element(fitness_vals.begin(), fitness_vals.end()) - fitness_vals.begin();
-        int bestK = population[bestIdx][0];
-        cout << "Route for rawK = " << bestK << ":" << endl;
-        print_solution_for_k(bestK);
-        cout << "Route for rawK = " << 3 << ":" << endl;
-      //  print_solution_for_k(3);
+        // imprime apenas o melhor fitness e o tempo
+        double best_fitness = get_current_best();
+        cout << "Best fitness for run " << run << ": "
+             << best_fitness << endl;
+        cout << "Time for run " << run << ": "
+             << elapsed_s << " s" << endl << endl;
+
         end_run(run);
     }
 
